@@ -18,61 +18,48 @@ def check_grammar(text, lang="en-US"):
 
 def highlight_incorrect_words(doc, matches):
     """
-    Highlights only the incorrect word(s) in red
-    and writes the corrected word next to it in green parentheses.
+    Highlights incorrect word(s) in red and their suggestions in green.
+    Avoids multiple replacements or nested brackets.
     """
-    for match in matches:
-        wrong_word = match["context"]["text"][match["context"]["offset"]:match["context"]["offset"] + match["context"]["length"]]
-        replacements = match.get("replacements", [])
-        suggestion = replacements[0]["value"] if replacements else None
+    for para in doc.paragraphs:
+        text = para.text
+        errors = []
 
-        if not wrong_word.strip() or not suggestion:
-            continue
+        for match in matches:
+            offset = match["context"]["offset"]
+            length = match["context"]["length"]
+            replacements = match.get("replacements", [])
+            suggestion = replacements[0]["value"] if replacements else None
 
-        # Loop through each paragraph to find and highlight the wrong word
-        for para in doc.paragraphs:
-            if wrong_word in para.text:
-                runs = []
-                start = 0
-                new_runs = []
-                text = para.text
-                while wrong_word in text[start:]:
-                    idx = text.find(wrong_word, start)
-                    if idx == -1:
-                        break
+            if not suggestion or offset < 0 or length <= 0:
+                continue
+            errors.append((offset, length, suggestion))
 
-                    # Text before wrong word
-                    if idx > start:
-                        new_runs.append((text[start:idx], None))
+        # Sort by offset descending to avoid corruption when replacing
+        errors.sort(reverse=True)
+        for offset, length, suggestion in errors:
+            wrong = text[offset:offset + length]
+            # Insert formatted text
+            text = text[:offset] + f"[{wrong} → {suggestion}]" + text[offset + length:]
 
-                    # Wrong word (red)
-                    new_runs.append((wrong_word, "red"))
+        para.text = text
 
-                    # Add corrected word in green parentheses
-                    new_runs.append((f"({suggestion})", "green"))
+        # Apply color formatting
+        for run in para.runs:
+            if "→" in run.text:
+                parts = run.text.split("→")
+                if len(parts) == 2:
+                    wrong_part, suggestion_part = parts
+                    run.clear()
+                    red_run = para.add_run(wrong_part)
+                    red_run.font.color.rgb = RGBColor(255, 0, 0)
+                    red_run.bold = True
 
-                    start = idx + len(wrong_word)
+                    arrow_run = para.add_run("→")
 
-                # Remaining text after last match
-                if start < len(text):
-                    new_runs.append((text[start:], None))
-
-                # Clear old paragraph
-                for run in para.runs:
-                    run.text = ""
-                para.text = ""
-
-                # Rebuild paragraph with formatting
-                for text_part, color in new_runs:
-                    run = para.add_run(text_part)
-                    if color == "red":
-                        run.font.color.rgb = RGBColor(255, 0, 0)  # Red for wrong word
-                        run.bold = True
-                    elif color == "green":
-                        run.font.color.rgb = RGBColor(0, 128, 0)  # Green for suggestion
-                        run.italic = True
-
-                break  # stop after one replacement per paragraph
+                    green_run = para.add_run(suggestion_part)
+                    green_run.font.color.rgb = RGBColor(0, 128, 0)
+                    green_run.italic = True
     return doc
 
 
@@ -87,18 +74,16 @@ def upload():
     if not file or not file.filename.endswith(".docx"):
         return "Please upload a .docx file", 400
 
-    original_filename = os.path.splitext(file.filename)[0]  # without extension
+    original_filename = os.path.splitext(file.filename)[0]
 
     doc = Document(file)
-    paras = [p.text for p in doc.paragraphs]
-    full_text = "\n".join(paras)
+    full_text = "\n".join([p.text for p in doc.paragraphs])
 
     lt_result = check_grammar(full_text, lang="en-US")
     matches = lt_result.get("matches", [])
 
     highlighted_doc = highlight_incorrect_words(doc, matches)
 
-    # Save output with "_corrected" suffix
     output_filename = f"{original_filename}_corrected.docx"
     output = io.BytesIO()
     highlighted_doc.save(output)
