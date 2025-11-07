@@ -1,115 +1,236 @@
-from flask import Flask, render_template, request, send_file
+from flask import Flask, render_template, request, send_file, url_for
 from docx import Document
 from docx.shared import RGBColor
 import requests
 import io
 import os
+import re
 
 app = Flask(__name__)
 
 LT_API_URL = "https://api.languagetool.org/v2/check"
 
-def check_grammar(text, lang="en-US"):
-    """Send text to LanguageTool API."""
-    data = {"text": text, "language": lang}
+
+# -----------------------------
+# Helper: detect reference-like lines
+# -----------------------------
+def is_reference_like(line: str) -> bool:
+    line_strip = line.strip()
+    if not line_strip:
+        return True
+    # URLs / DOIs
+    if "http" in line_strip or "www." in line_strip or "doi" in line_strip.lower():
+        return True
+    # [1], [12]
+    if re.match(r"^\[\d+\]$", line_strip):
+        return True
+    # (Kim et al., 2024)
+    if re.match(r"^\(.+\d{4}.*\)$", line_strip):
+        return True
+    return False
+
+
+# -----------------------------
+# Helper: call LanguageTool
+# -----------------------------
+def lt_check_sentence(sentence: str, lang="en-US"):
+    data = {"text": sentence, "language": lang}
     resp = requests.post(LT_API_URL, data=data)
     resp.raise_for_status()
     return resp.json()
 
-def highlight_incorrect_words(doc, matches):
-    """
-    Highlights only the incorrect word(s) in red
-    and writes the corrected word next to it in green parentheses.
-    """
-    for match in matches:
-        wrong_word = match["context"]["text"][match["context"]["offset"]:match["context"]["offset"] + match["context"]["length"]]
-        replacements = match.get("replacements", [])
-        suggestion = replacements[0]["value"] if replacements else None
 
-        if not wrong_word.strip() or not suggestion:
+# -----------------------------
+# DOCX highlighting (for download)
+# This one checks EACH paragraph separately,
+# so the downloaded file matches what you see on web.
+# -----------------------------
+def highlight_docx_paragraphs(doc: Document) -> Document:
+    for para in doc.paragraphs:
+        original_text = para.text
+        if not original_text.strip():
             continue
 
-        # Loop through each paragraph to find and highlight the wrong word
-        for para in doc.paragraphs:
-            if wrong_word in para.text:
-                runs = []
-                start = 0
-                new_runs = []
-                text = para.text
-                while wrong_word in text[start:]:
-                    idx = text.find(wrong_word, start)
-                    if idx == -1:
-                        break
+        # skip references / links
+        if is_reference_like(original_text):
+            continue
 
-                    # Text before wrong word
-                    if idx > start:
-                        new_runs.append((text[start:idx], None))
+        # run LT on this paragraph only
+        result = lt_check_sentence(original_text)
+        matches = result.get("matches", [])
+        if not matches:
+            continue
 
-                    # Wrong word (red)
-                    new_runs.append((wrong_word, "red"))
+        # collect spans
+        spans = []
+        for m in matches:
+            offset = m.get("offset")
+            length = m.get("length")
+            replacements = m.get("replacements", [])
+            suggestion = replacements[0]["value"] if replacements else ""
+            if offset is None or length is None:
+                continue
+            spans.append((offset, length, suggestion))
 
-                    # Add corrected word in green parentheses
-                    new_runs.append((f"({suggestion})", "green"))
+        # sort by offset ascending so we can rebuild text
+        spans.sort(key=lambda x: x[0])
 
-                    start = idx + len(wrong_word)
+        # rebuild paragraph text into colored runs
+        new_segments = []
+        cursor = 0
+        for offset, length, suggestion in spans:
+            start = offset
+            end = offset + length
+            # normal text before error
+            if cursor < start:
+                new_segments.append((original_text[cursor:start], None, False))
+            wrong_word = original_text[start:end]
+            # wrong in red + bold
+            new_segments.append((wrong_word, RGBColor(255, 0, 0), True))
+            # suggestion in green (if any)
+            if suggestion:
+                new_segments.append((" → " + suggestion, RGBColor(0, 128, 0), False))
+            cursor = end
 
-                # Remaining text after last match
-                if start < len(text):
-                    new_runs.append((text[start:], None))
+        # remaining text
+        if cursor < len(original_text):
+            new_segments.append((original_text[cursor:], None, False))
 
-                # Clear old paragraph
-                for run in para.runs:
-                    run.text = ""
-                para.text = ""
+        # clear old paragraph
+        for r in para.runs:
+            r.text = ""
+        para.text = ""
 
-                # Rebuild paragraph with formatting
-                for text_part, color in new_runs:
-                    run = para.add_run(text_part)
-                    if color == "red":
-                        run.font.color.rgb = RGBColor(255, 0, 0)  # Red for wrong word
-                        run.bold = True
-                    elif color == "green":
-                        run.font.color.rgb = RGBColor(0, 128, 0)  # Green for suggestion
-                        run.italic = True
+        # write back with formatting
+        for text_part, color, bold in new_segments:
+            run = para.add_run(text_part)
+            if color:
+                run.font.color.rgb = color
+            run.bold = bold
 
-                break  # stop after one replacement per paragraph
     return doc
 
 
-@app.route("/")
+# -----------------------------
+# Web preview builder (you already had this)
+# -----------------------------
+def process_text_line_by_line(text: str):
+    lines = text.splitlines()
+    final_html_parts = []
+    all_issues = []
+    line_no = 0
+
+    for line in lines:
+        line_no += 1
+
+        # skip refs
+        if is_reference_like(line):
+            final_html_parts.append(f"<p>{line}</p>")
+            continue
+
+        if not line.strip():
+            final_html_parts.append("<p></p>")
+            continue
+
+        lt_result = lt_check_sentence(line)
+        matches = lt_result.get("matches", [])
+        spans = []
+        for m in matches:
+            offset = m.get("offset")
+            length = m.get("length")
+            replacements = m.get("replacements", [])
+            suggestion = replacements[0]["value"] if replacements else None
+            message = m.get("message", "")
+            if offset is None or length is None:
+                continue
+            spans.append({
+                "offset": offset,
+                "length": length,
+                "suggestion": suggestion,
+                "message": message
+            })
+
+        # sort by offset
+        spans.sort(key=lambda x: x["offset"])
+
+        html_line = ""
+        cursor = 0
+        for sp in spans:
+            start = sp["offset"]
+            end = sp["offset"] + sp["length"]
+            wrong = line[start:end]
+            before = line[cursor:start]
+            html_line += before
+            html_line += (
+                f"<span class='error' data-suggestion='{sp['suggestion'] or ''}' "
+                f"data-message='{sp['message']}'>{wrong}</span>"
+            )
+
+            all_issues.append({
+                "line": line_no,
+                "wrong": wrong,
+                "suggestion": sp["suggestion"] or "",
+                "message": sp["message"]
+            })
+            cursor = end
+
+        html_line += line[cursor:]
+        final_html_parts.append(f"<p>{html_line}</p>")
+
+    highlighted_html = "\n".join(final_html_parts)
+    return highlighted_html, all_issues
+
+
+# -----------------------------
+# Routes
+# -----------------------------
+@app.route("/", methods=["GET", "POST"])
 def index():
+    if request.method == "POST":
+        input_text = request.form.get("text", "").strip()
+        file = request.files.get("file")
+
+        # 1) get text + doc object
+        if file and file.filename.endswith(".docx"):
+            doc = Document(file)
+            text = "\n".join([p.text for p in doc.paragraphs])
+            original_name = os.path.splitext(file.filename)[0]
+        else:
+            text = input_text
+            doc = Document()
+            doc.add_paragraph(text)
+            original_name = "corrected_output"
+
+        if not text:
+            return render_template("index.html", error="Please provide text or upload a .docx file.")
+
+        # 2) build web preview
+        highlighted_html, issues = process_text_line_by_line(text)
+
+        # 3) build downloadable docx (paragraph-wise)
+        highlighted_doc = highlight_docx_paragraphs(doc)
+
+        # 4) save to static
+        os.makedirs("static", exist_ok=True)
+        filename = f"{original_name}_corrected.docx"
+        output_path = os.path.join("static", filename)
+        highlighted_doc.save(output_path)
+
+        # 5) render page
+        return render_template(
+            "result.html",
+            highlighted_html=highlighted_html,
+            issues=issues,
+            download_link=url_for("download_file", filename=filename)
+        )
+
     return render_template("index.html")
 
 
-@app.route("/upload", methods=["POST"])
-def upload():
-    file = request.files.get("file")
-    if not file or not file.filename.endswith(".docx"):
-        return "Please upload a .docx file", 400
-
-    original_filename = os.path.splitext(file.filename)[0]  # without extension
-
-    doc = Document(file)
-    paras = [p.text for p in doc.paragraphs]
-    full_text = "\n".join(paras)
-
-    lt_result = check_grammar(full_text, lang="en-US")
-    matches = lt_result.get("matches", [])
-
-    highlighted_doc = highlight_incorrect_words(doc, matches)
-
-    # Save output with "_corrected" suffix
-    output_filename = f"{original_filename}_corrected.docx"
-    output = io.BytesIO()
-    highlighted_doc.save(output)
-    output.seek(0)
-
-    return send_file(
-        output,
-        as_attachment=True,
-        download_name=output_filename,
-        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+@app.route("/download/<filename>")
+def download_file(filename):
+    file_path = os.path.join("static", filename)
+    return send_file(file_path, as_attachment=True)
 
 
 if __name__ == "__main__":
