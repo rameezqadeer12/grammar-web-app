@@ -71,7 +71,7 @@
       padding: 15px;
       border-radius: 8px;
       box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-      min-width: 280px;
+      min-width: 320px;
       display: none;
       z-index: 999;
     }
@@ -79,6 +79,10 @@
       margin-top: 0;
       font-size: 16px;
       color: #4e54c8;
+    }
+    .suggestion-box p {
+      margin-bottom: 8px;
+      font-size: 14px;
     }
     .issues-list table {
       width: 100%;
@@ -109,7 +113,7 @@
 <body>
   <div class="container">
     <h1>✨ Grammar Check Result</h1>
-    <p>Click on highlighted words to see suggestions.</p>
+    <p>Click on highlighted words to see suggestions and meanings.</p>
 
     <!-- ✅ Download corrected DOCX button -->
     {% if download_link %}
@@ -123,9 +127,10 @@
 
     <!-- Suggestion popup -->
     <div class="suggestion-box" id="suggBox">
-      <h3>Suggestion</h3>
-      <p id="suggMessage"></p>
-      <p><strong>Replace with:</strong> <span id="suggText" style="color:green;"></span></p>
+      <h3>Suggestion Details</h3>
+      <p><strong>Issue:</strong> <span id="suggMessage"></span></p>
+      <p><strong>Suggested Fix:</strong> <span id="suggText" style="color:green;"></span></p>
+      <p><strong>Meaning:</strong> <span id="suggMeaning" style="color:#4e54c8;"></span></p>
       <button class="btn btn-sm btn-secondary" onclick="closeSugg()">Close</button>
     </div>
 
@@ -141,6 +146,7 @@
             <th>Wrong</th>
             <th>Suggestion</th>
             <th>Message</th>
+            <th>Meaning</th>
           </tr>
         </thead>
         <tbody>
@@ -151,6 +157,7 @@
             <td>{{ issue.wrong }}</td>
             <td>{{ issue.suggestion }}</td>
             <td>{{ issue.message }}</td>
+            <td>{{ issue.meaning }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -168,6 +175,7 @@
     const box = document.getElementById('suggBox');
     const msg = document.getElementById('suggMessage');
     const txt = document.getElementById('suggText');
+    const meaning = document.getElementById('suggMeaning');
 
     function closeSugg() {
       box.style.display = 'none';
@@ -175,10 +183,12 @@
 
     document.addEventListener('click', function(e) {
       if (e.target.classList.contains('error')) {
-        const suggestion = e.target.getAttribute('data-suggestion') || "(no automatic suggestion)";
+        const suggestion = e.target.getAttribute('data-suggestion') || "(no suggestion)";
         const message = e.target.getAttribute('data-message') || "";
+        const mean = e.target.getAttribute('data-meaning') || "(no meaning)";
         msg.textContent = message;
         txt.textContent = suggestion;
+        meaning.textContent = mean;
         box.style.display = 'block';
       }
     });
