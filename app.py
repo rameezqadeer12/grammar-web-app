@@ -5,11 +5,49 @@ import requests
 import io
 import os
 import re
+import json
 
 app = Flask(__name__)
 
 LT_API_URL = "https://api.languagetool.org/v2/check"
 
+# -----------------------------
+# Dictionary helpers (FREE)
+# -----------------------------
+
+def get_law_meaning(word):
+    """Check local Black's Law Dictionary JSON"""
+    try:
+        with open("blacklaw_terms.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get(word.lower(), None)
+    except:
+        return None
+
+
+def get_general_meaning(word):
+    """Free public dictionary API (dictionaryapi.dev)"""
+    try:
+        resp = requests.get(f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data[0]["meanings"][0]["definitions"][0]["definition"]
+    except:
+        pass
+    return None
+
+
+def get_word_meaning(word):
+    """Combine both dictionaries"""
+    if not word:
+        return "(No meaning)"
+    law = get_law_meaning(word)
+    if law:
+        return f"{law} (Black's Law Dictionary)"
+    general = get_general_meaning(word)
+    if general:
+        return f"{general} (Free Dictionary API)"
+    return "(No meaning found)"
 
 # -----------------------------
 # Helper: detect reference-like lines
@@ -18,13 +56,10 @@ def is_reference_like(line: str) -> bool:
     line_strip = line.strip()
     if not line_strip:
         return True
-    # URLs / DOIs
     if "http" in line_strip or "www." in line_strip or "doi" in line_strip.lower():
         return True
-    # [1], [12]
     if re.match(r"^\[\d+\]$", line_strip):
         return True
-    # (Kim et al., 2024)
     if re.match(r"^\(.+\d{4}.*\)$", line_strip):
         return True
     return False
@@ -42,26 +77,18 @@ def lt_check_sentence(sentence: str, lang="en-US"):
 
 # -----------------------------
 # DOCX highlighting (for download)
-# This one checks EACH paragraph separately,
-# so the downloaded file matches what you see on web.
 # -----------------------------
 def highlight_docx_paragraphs(doc: Document) -> Document:
     for para in doc.paragraphs:
         original_text = para.text
-        if not original_text.strip():
+        if not original_text.strip() or is_reference_like(original_text):
             continue
 
-        # skip references / links
-        if is_reference_like(original_text):
-            continue
-
-        # run LT on this paragraph only
         result = lt_check_sentence(original_text)
         matches = result.get("matches", [])
         if not matches:
             continue
 
-        # collect spans
         spans = []
         for m in matches:
             offset = m.get("offset")
@@ -71,37 +98,25 @@ def highlight_docx_paragraphs(doc: Document) -> Document:
             if offset is None or length is None:
                 continue
             spans.append((offset, length, suggestion))
-
-        # sort by offset ascending so we can rebuild text
         spans.sort(key=lambda x: x[0])
 
-        # rebuild paragraph text into colored runs
         new_segments = []
         cursor = 0
         for offset, length, suggestion in spans:
-            start = offset
-            end = offset + length
-            # normal text before error
+            start, end = offset, offset + length
             if cursor < start:
                 new_segments.append((original_text[cursor:start], None, False))
             wrong_word = original_text[start:end]
-            # wrong in red + bold
             new_segments.append((wrong_word, RGBColor(255, 0, 0), True))
-            # suggestion in green (if any)
             if suggestion:
                 new_segments.append((" → " + suggestion, RGBColor(0, 128, 0), False))
             cursor = end
-
-        # remaining text
         if cursor < len(original_text):
             new_segments.append((original_text[cursor:], None, False))
 
-        # clear old paragraph
         for r in para.runs:
             r.text = ""
         para.text = ""
-
-        # write back with formatting
         for text_part, color, bold in new_segments:
             run = para.add_run(text_part)
             if color:
@@ -112,7 +127,7 @@ def highlight_docx_paragraphs(doc: Document) -> Document:
 
 
 # -----------------------------
-# Web preview builder (you already had this)
+# Web preview builder
 # -----------------------------
 def process_text_line_by_line(text: str):
     lines = text.splitlines()
@@ -122,12 +137,9 @@ def process_text_line_by_line(text: str):
 
     for line in lines:
         line_no += 1
-
-        # skip refs
         if is_reference_like(line):
             final_html_parts.append(f"<p>{line}</p>")
             continue
-
         if not line.strip():
             final_html_parts.append("<p></p>")
             continue
@@ -143,37 +155,36 @@ def process_text_line_by_line(text: str):
             message = m.get("message", "")
             if offset is None or length is None:
                 continue
+            meaning_text = get_word_meaning(suggestion or "")
             spans.append({
                 "offset": offset,
                 "length": length,
                 "suggestion": suggestion,
-                "message": message
+                "message": message,
+                "meaning": meaning_text
             })
-
-        # sort by offset
         spans.sort(key=lambda x: x["offset"])
 
         html_line = ""
         cursor = 0
         for sp in spans:
-            start = sp["offset"]
-            end = sp["offset"] + sp["length"]
+            start, end = sp["offset"], sp["offset"] + sp["length"]
             wrong = line[start:end]
             before = line[cursor:start]
             html_line += before
             html_line += (
                 f"<span class='error' data-suggestion='{sp['suggestion'] or ''}' "
-                f"data-message='{sp['message']}'>{wrong}</span>"
+                f"data-message='{sp['message']}' "
+                f"data-meaning='{sp['meaning']}'>{wrong}</span>"
             )
-
             all_issues.append({
                 "line": line_no,
                 "wrong": wrong,
                 "suggestion": sp["suggestion"] or "",
-                "message": sp["message"]
+                "message": sp["message"],
+                "meaning": sp["meaning"]
             })
             cursor = end
-
         html_line += line[cursor:]
         final_html_parts.append(f"<p>{html_line}</p>")
 
@@ -190,7 +201,6 @@ def index():
         input_text = request.form.get("text", "").strip()
         file = request.files.get("file")
 
-        # 1) get text + doc object
         if file and file.filename.endswith(".docx"):
             doc = Document(file)
             text = "\n".join([p.text for p in doc.paragraphs])
@@ -204,19 +214,14 @@ def index():
         if not text:
             return render_template("index.html", error="Please provide text or upload a .docx file.")
 
-        # 2) build web preview
         highlighted_html, issues = process_text_line_by_line(text)
-
-        # 3) build downloadable docx (paragraph-wise)
         highlighted_doc = highlight_docx_paragraphs(doc)
 
-        # 4) save to static
         os.makedirs("static", exist_ok=True)
         filename = f"{original_name}_corrected.docx"
         output_path = os.path.join("static", filename)
         highlighted_doc.save(output_path)
 
-        # 5) render page
         return render_template(
             "result.html",
             highlighted_html=highlighted_html,
