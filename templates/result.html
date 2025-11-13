@@ -23,12 +23,14 @@
       padding: 35px;
       width: 95%;
       max-width: 950px;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
     }
     .text-area {
-      border: 1px solid #ddd;
-      padding: 20px;
+      border: 1px solid #ccc;
+      padding: 18px;
       border-radius: 10px;
+      background: #fafafa;
+      min-height: 150px;
     }
     .grammar-wrong, .legal-correct {
       border-bottom: 3px solid purple;
@@ -36,23 +38,42 @@
       cursor: pointer;
       padding: 2px 3px;
     }
+
+    /* POPUP BOX */
     .popup-box {
       position: fixed;
-      top: 25%;
+      top: 30%;
       left: 50%;
       transform: translate(-50%, -50%);
       background: white;
-      padding: 20px;
-      border-radius: 10px;
-      box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+      padding: 25px;
+      border-radius: 12px;
       width: 420px;
+      max-width: 95%;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.35);
       display: none;
       z-index: 9999;
     }
     .label-title {
       font-weight: bold;
       color: #4e54c8;
+      font-size: 22px;
     }
+
+    .suggest-btn {
+      background: #eee;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-bottom: 5px;
+      display: inline-block;
+      font-weight: 600;
+    }
+
+    .suggest-btn:hover {
+      background: #dcdcdc;
+    }
+
   </style>
 </head>
 
@@ -70,27 +91,29 @@
       {{ highlighted_html|safe }}
     </div>
 
-    <!-- Hidden form for sending corrected data -->
+    <!-- FORM TO SEND FINAL TEXT -->
     <form id="downloadForm" action="/download_corrected" method="POST">
       <input type="hidden" name="final_text" id="finalTextField">
       <input type="hidden" name="replacements" id="finalReplacementsField">
     </form>
 
-    <!-- POPUP BOX -->
+    <!-- POPUP -->
     <div id="popup" class="popup-box">
       <h4 class="label-title">Correction Suggestion</h4>
 
       <p><b>Wrong Word:</b> <span id="popupWrong"></span></p>
 
-      <p><b>Black's Law Suggestion:</b>
-        <span id="popupBlack" style="color:green;"></span>
-      </p>
+      <div>
+        <b>Black’s Law Suggestion:</b>  
+        <div id="popupBlack" class="suggest-btn">—</div>
+      </div>
 
-      <p><b>General Suggestion:</b>
-        <span id="popupGeneral" style="color:#444;"></span>
-      </p>
+      <div>
+        <b>General Suggestion:</b>
+        <div id="popupGeneral" class="suggest-btn">—</div>
+      </div>
 
-      <button class="btn btn-success" onclick="applyFix()">Apply Fix</button>
+      <button class="btn btn-success mt-2" onclick="applyFix()">Apply Fix</button>
       <button class="btn btn-warning" onclick="ignoreFix()">Ignore</button>
       <button class="btn btn-secondary" onclick="closePopup()">Cancel</button>
     </div>
@@ -105,21 +128,23 @@
     let finalSuggestion = "";
     let replacements = [];
 
-    // CLICK HANDLER
+    // CLICK EVENT
     document.addEventListener('click', function (e) {
+
       if (e.target.classList.contains('grammar-wrong') ||
           e.target.classList.contains('legal-correct')) {
 
         selectedElement = e.target;
-        selectedWrong   = e.target.dataset.wrong;
-        blackSuggestion = e.target.dataset.blackSuggestion || "";
-        generalSuggestion = e.target.dataset.generalSuggestion || "";
-
-        finalSuggestion = blackSuggestion || generalSuggestion;
+        selectedWrong = e.target.dataset.wrong;
+        blackSuggestion = e.target.dataset.black || "";
+        generalSuggestion = e.target.dataset.general || "";
 
         document.getElementById("popupWrong").innerText = selectedWrong;
+
         document.getElementById("popupBlack").innerText = blackSuggestion || "—";
         document.getElementById("popupGeneral").innerText = generalSuggestion || "—";
+
+        finalSuggestion = blackSuggestion || generalSuggestion;
 
         document.getElementById('popup').style.display = "block";
       }
@@ -144,7 +169,7 @@
       closePopup();
     }
 
-    // IGNORE FIX
+    // IGNORE
     function ignoreFix() {
       if (!selectedElement) return;
 
@@ -152,7 +177,7 @@
       closePopup();
     }
 
-    // DOWNLOAD FINAL DOCX
+    // DOWNLOAD DOCX
     function downloadFinalDoc() {
       const finalText = document.getElementById("textContainer").innerText.trim();
 
