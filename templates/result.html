@@ -45,7 +45,7 @@
       padding: 20px;
       border-radius: 10px;
       box-shadow: 0 5px 20px rgba(0,0,0,0.3);
-      width: 420px;
+      width: 450px;
       display: none;
       z-index: 9999;
     }
@@ -87,7 +87,10 @@
         <span id="popupGeneral" style="color:#444;"></span>
       </p>
 
-      <button class="btn btn-success" onclick="applyFix()">Apply Fix</button>
+      <!-- NEW BUTTONS -->
+      <button id="useBlackBtn" class="btn btn-success" onclick="applyBlack()">Use Black Law</button>
+      <button id="useGeneralBtn" class="btn btn-info text-white" onclick="applyGeneral()">Use General</button>
+
       <button class="btn btn-warning" onclick="ignoreFix()">Ignore</button>
       <button class="btn btn-secondary" onclick="closePopup()">Cancel</button>
     </div>
@@ -99,23 +102,26 @@
     let selectedWrong = "";
     let blackSuggestion = "";
     let generalSuggestion = "";
-    let finalSuggestion = "";
     let replacements = [];
 
     document.addEventListener('click', function (e) {
-      if (e.target.classList.contains('grammar-wrong') ||
-          e.target.classList.contains('legal-correct')) {
+      if (e.target.classList.contains('grammar-wrong') || e.target.classList.contains('legal-correct')) {
 
         selectedElement = e.target;
         selectedWrong = e.target.dataset.wrong;
         blackSuggestion = e.target.dataset.blackSuggestion || "";
         generalSuggestion = e.target.dataset.generalSuggestion || "";
 
-        finalSuggestion = blackSuggestion || generalSuggestion;
-
         document.getElementById("popupWrong").innerText = selectedWrong;
         document.getElementById("popupBlack").innerText = blackSuggestion || "—";
         document.getElementById("popupGeneral").innerText = generalSuggestion || "—";
+
+        // BUTTON SHOW/HIDE LOGIC
+        document.getElementById("useBlackBtn").style.display =
+            blackSuggestion ? "inline-block" : "none";
+
+        document.getElementById("useGeneralBtn").style.display =
+            generalSuggestion ? "inline-block" : "none";
 
         document.getElementById('popup').style.display = "block";
       }
@@ -125,10 +131,17 @@
       document.getElementById('popup').style.display = "none";
     }
 
-    function applyFix() {
+    function applyBlack() {
+      applyFix(blackSuggestion);
+    }
+
+    function applyGeneral() {
+      applyFix(generalSuggestion);
+    }
+
+    function applyFix(finalSuggestion) {
       if (!selectedElement || !finalSuggestion) return;
 
-      // FIXED (quotes added)
       selectedElement.outerHTML =
         `<span style="background:yellow; padding:3px 5px; border-radius:4px;">${finalSuggestion}</span>`;
 
@@ -143,20 +156,14 @@
     function ignoreFix() {
       if (!selectedElement) return;
 
-      // FIXED (quotes added)
-      selectedElement.outerHTML =
-        `<span>${selectedWrong}</span>`;
-
+      selectedElement.outerHTML = `<span>${selectedWrong}</span>`;
       closePopup();
     }
 
     function downloadFinalDoc() {
       const finalText = document.getElementById("textContainer").innerText.trim();
-
       document.getElementById("finalTextField").value = finalText;
-      document.getElementById("finalReplacementsField").value =
-        JSON.stringify(replacements);
-
+      document.getElementById("finalReplacementsField").value = JSON.stringify(replacements);
       document.getElementById("downloadForm").submit();
     }
   </script>
