@@ -1,170 +1,130 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Grammar Check Result</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Grammar Checker</title>
 
-  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- Google Font + Bootstrap CSS -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 
-  <style>
-    body {
-      font-family: 'Poppins', sans-serif;
-      background: linear-gradient(135deg, #4e54c8, #8f94fb);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .container {
-      background: #fff;
-      border-radius: 16px;
-      padding: 35px;
-      width: 95%;
-      max-width: 950px;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-    }
-    .text-area {
-      border: 1px solid #ddd;
-      padding: 20px;
-      border-radius: 10px;
-    }
-    .grammar-wrong, .legal-correct {
-      border-bottom: 3px solid purple;
-      font-weight: bold;
-      cursor: pointer;
-      padding: 2px 3px;
-    }
-    .popup-box {
-      position: fixed;
-      top: 25%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: white;
-      padding: 20px;
-      border-radius: 10px;
-      box-shadow: 0 5px 20px rgba(0,0,0,0.3);
-      width: 420px;
-      display: none;
-      z-index: 9999;
-    }
-    .label-title {
-      font-weight: bold;
-      color: #4e54c8;
-    }
-  </style>
+    <style>
+        body {
+            font-family: 'Poppins', sans-serif;
+            background: linear-gradient(135deg, #4e54c8, #8f94fb);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 15px;
+        }
+
+        .container {
+            background-color: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+            padding: 40px 32px;
+            width: 100%;
+            max-width: 500px;
+            animation: fadeIn 0.5s ease-in-out;
+            text-align: center;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        h2 {
+            color: #4e54c8;
+            font-weight: 600;
+            font-size: 28px;
+            margin-bottom: 18px;
+        }
+
+        p {
+            color: #555;
+            font-size: 15px;
+        }
+
+        textarea {
+            width: 100%;
+            border-radius: 10px;
+            padding: 12px;
+            border: 2px dashed #8f94fb;
+            resize: vertical;
+            background-color: #f7f8ff;
+            font-size: 14px;
+        }
+
+        input[type="file"] {
+            border: 2px dashed #8f94fb;
+            border-radius: 10px;
+            padding: 12px;
+            background-color: #f7f8ff;
+            cursor: pointer;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #4e54c8, #8f94fb);
+            border: none;
+            border-radius: 10px;
+            padding: 12px 28px;
+            font-weight: 600;
+            font-size: 16px;
+            width: 100%;
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #5d63e2, #9da2ff);
+        }
+
+        .or-divider {
+            margin: 18px 0;
+            font-weight: 600;
+            color: #666;
+            font-size: 14px;
+            letter-spacing: 1px;
+        }
+
+        footer {
+            margin-top: 25px;
+            font-size: 12px;
+            color: #777;
+        }
+    </style>
 </head>
 
 <body>
-  <div class="container">
+    <div class="container">
+        <h2>✨ AI Grammar Checker</h2>
+        <p>Upload a <strong>.docx</strong> file or type text below for instant grammar correction.</p>
 
-    <h1>✨ Grammar Check Result</h1>
+        <!-- MAIN FORM -->
+        <form action="/" method="post" enctype="multipart/form-data" class="mt-4">
 
-    {% if download_link %}
-      <a href="{{ download_link }}" class="btn btn-primary" onclick="prepareForDownload()" download>
-        ⬇️ Download Corrected File (.docx)
-      </a>
-    {% endif %}
+            <!-- TEXT INPUT -->
+            <textarea name="text" rows="5" placeholder="Type or paste your text here..."></textarea>
 
-    <!-- MAIN TEXT -->
-    <div id="textContainer" class="text-area">
-      {{ highlighted_html|safe }}
+            <div class="or-divider">OR</div>
+
+            <!-- DOCX UPLOAD -->
+            <input type="file" name="file" accept=".docx" class="mb-3">
+
+            <!-- Hidden input for replacements (needed for backend processing on Render) -->
+            <input type="hidden" name="replacements" id="replacementsInput" value="[]">
+
+            <button type="submit" class="btn btn-primary">Check Grammar</button>
+        </form>
+
+        <footer>Powered by LanguageTool + Flask | © 2025</footer>
     </div>
 
-    <!-- Hidden form to send accepted replacements + final text -->
-    <form id="saveForm" action="/" method="post">
-      <input type="hidden" name="text" id="finalTextInput">
-      <input type="hidden" name="replacements" id="replacementsInput">
-    </form>
-
-    <!-- POPUP BOX -->
-    <div id="popup" class="popup-box">
-      <h4 class="label-title">Correction Suggestion</h4>
-
-      <p><b>Wrong Word:</b> <span id="popupWrong"></span></p>
-
-      <p><b>Black's Law Suggestion:</b>
-        <span id="popupBlack" style="color:green;"></span>
-      </p>
-
-      <p><b>General Suggestion:</b>
-        <span id="popupGeneral" style="color:#444;"></span>
-      </p>
-
-      <button class="btn btn-success" onclick="applyFix()">Apply Fix</button>
-      <button class="btn btn-warning" onclick="ignoreFix()">Ignore</button>
-      <button class="btn btn-secondary" onclick="closePopup()">Cancel</button>
-    </div>
-
-  </div>
-
-  <script>
-    let selectedElement = null;
-    let selectedWrong = "";
-    let blackSuggestion = "";
-    let generalSuggestion = "";
-    let finalSuggestion = "";
-    let replacements = [];
-
-    // CLICK HANDLER
-    document.addEventListener('click', function (e) {
-      if (e.target.classList.contains('grammar-wrong') ||
-          e.target.classList.contains('legal-correct')) {
-
-        selectedElement = e.target;
-        selectedWrong   = e.target.dataset.wrong;
-        blackSuggestion = e.target.dataset.blackSuggestion || "";
-        generalSuggestion = e.target.dataset.generalSuggestion || "";
-
-        finalSuggestion = blackSuggestion || generalSuggestion;
-
-        document.getElementById("popupWrong").innerText = selectedWrong;
-        document.getElementById("popupBlack").innerText = blackSuggestion || "—";
-        document.getElementById("popupGeneral").innerText = generalSuggestion || "—";
-
-        document.getElementById('popup').style.display = "block";
-      }
-    });
-
-    function closePopup() {
-      document.getElementById('popup').style.display = "none";
-    }
-
-    // APPLY FIX
-    function applyFix() {
-      if (!selectedElement || !finalSuggestion) return;
-
-      selectedElement.outerHTML =
-        `<span style="background:yellow; padding:3px 5px; border-radius:4px;">${finalSuggestion}</span>`;
-
-      replacements.push({
-        old: selectedWrong,
-        new: finalSuggestion
-      });
-
-      closePopup();
-    }
-
-    // IGNORE FIX
-    function ignoreFix() {
-      if (!selectedElement) return;
-
-      selectedElement.outerHTML = `<span>${selectedWrong}</span>`;
-      closePopup();
-    }
-
-    // SAVE before downloading DOCX
-    function prepareForDownload() {
-      const container = document.getElementById("textContainer");
-      let finalText = container.innerText.trim();
-
-      document.getElementById("finalTextInput").value = finalText;
-      document.getElementById("replacementsInput").value = JSON.stringify(replacements);
-
-      document.getElementById("saveForm").submit();
-    }
-  </script>
-
+    <script>
+        // This ensures GitHub/Render backend receives replacements even if empty
+        document.getElementById("replacementsInput").value = "[]";
+    </script>
 </body>
 </html>
