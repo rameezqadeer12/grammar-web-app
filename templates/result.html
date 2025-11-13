@@ -61,21 +61,19 @@
 
     <h1>✨ Grammar Check Result</h1>
 
-    {% if download_link %}
-      <a href="{{ download_link }}" class="btn btn-primary" onclick="prepareForDownload()" download>
-        ⬇️ Download Corrected File (.docx)
-      </a>
-    {% endif %}
+    <button class="btn btn-primary" onclick="downloadFinalDoc()">
+      ⬇️ Download Corrected File (.docx)
+    </button>
 
     <!-- MAIN TEXT -->
     <div id="textContainer" class="text-area">
       {{ highlighted_html|safe }}
     </div>
 
-    <!-- Hidden form to send accepted replacements + final text -->
-    <form id="saveForm" action="/" method="post">
-      <input type="hidden" name="text" id="finalTextInput">
-      <input type="hidden" name="replacements" id="replacementsInput">
+    <!-- Hidden form for sending corrected data -->
+    <form id="downloadForm" action="/download_corrected" method="POST">
+      <input type="hidden" name="final_text" id="finalTextField">
+      <input type="hidden" name="replacements" id="finalReplacementsField">
     </form>
 
     <!-- POPUP BOX -->
@@ -154,15 +152,14 @@
       closePopup();
     }
 
-    // SAVE before downloading DOCX
-    function prepareForDownload() {
-      const container = document.getElementById("textContainer");
-      let finalText = container.innerText.trim();
+    // DOWNLOAD FINAL DOCX
+    function downloadFinalDoc() {
+      const finalText = document.getElementById("textContainer").innerText.trim();
 
-      document.getElementById("finalTextInput").value = finalText;
-      document.getElementById("replacementsInput").value = JSON.stringify(replacements);
+      document.getElementById("finalTextField").value = finalText;
+      document.getElementById("finalReplacementsField").value = JSON.stringify(replacements);
 
-      document.getElementById("saveForm").submit();
+      document.getElementById("downloadForm").submit();
     }
   </script>
 
