@@ -1,18 +1,42 @@
-from flask import Flask, render_template, request, send_file, url_for, jsonify
+from flask import Flask, render_template, request, send_file
 from docx import Document
-from docx.shared import RGBColor
 import requests
 import os
 import re
 import json
-from html import escape  # ✅ safe HTML escaping
+from dotenv import load_dotenv
 
+# -------------------------------------------------------
+#           1) Load environment variables (.env)
+# -------------------------------------------------------
+load_dotenv()
+
+# -------------------------------------------------------
+#           2) Groq client init
+# -------------------------------------------------------
+from groq import Groq
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+try:
+    groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+    if groq_client:
+        print("✅ Groq Loaded Successfully")
+    else:
+        print("⚠️ GROQ_API_KEY missing or empty")
+except Exception as e:
+    print("❌ Groq Error:", e)
+    groq_client = None
+
+# -------------------------------------------------------
+#           3) Flask app + LanguageTool URL
+# -------------------------------------------------------
 app = Flask(__name__)
+
 LT_API_URL = "https://api.languagetool.org/v2/check"
 
-# ---------------------------------------------------------------------
-# ✅ Load Black’s Law Dictionary once (UNCHANGED LOGIC)
-# ---------------------------------------------------------------------
+# -------------------------------------------------------
+#      4) Load Black’s Law Dictionary JSON (local)
+# -------------------------------------------------------
 try:
     with open("blacklaw_terms.json", "r", encoding="utf-8") as f:
         BLACKLAW = json.load(f)
@@ -21,26 +45,29 @@ except Exception:
 
 
 def normalize_key(word: str) -> str:
-    """Normalize a word for lookup in BLACKLAW."""
+    """Normalize keys for Black's Law lookup."""
     return re.sub(r"[^a-z\s]", "", word.lower().strip())
 
 
-# ---------------------------------------------------------------------
-# ✅ Legal fixes (UNCHANGED)
-# ---------------------------------------------------------------------
+# -------------------------------------------------------
+#      5) Legal fix rules (wrong → correct)
+# -------------------------------------------------------
 LEGAL_FIX = {
+    "suo moto": "suo motu",
     "prima facia": "prima facie",
     "mens reaa": "mens rea",
     "ratio decedendi": "ratio decidendi",
-    "precedant": "precedent",
-    "jurispridence": "jurisprudence",
-    "suo moto": "suo motu",
 }
 
-# ---------------------------------------------------------------------
-# ✅ Ignore citations (UNCHANGED)
-# ---------------------------------------------------------------------
+# Common helper words we never want Groq to touch
+IGNORE_WORDS = {
+    "was", "the", "is", "and", "to", "in", "for",
+    "of", "at", "by", "on", "with"
+}
+
+
 def is_reference_like(line: str) -> bool:
+    """Lines that look like references / links -> skip grammar checks."""
     s = line.strip()
     return (
         not s
@@ -51,208 +78,212 @@ def is_reference_like(line: str) -> bool:
         or re.match(r"^\(.+\d{4}.*\)$", s)
     )
 
-# ---------------------------------------------------------------------
-# ✅ LanguageTool filtering (UNCHANGED)
-# ---------------------------------------------------------------------
-def lt_check_sentence(sentence: str, lang: str = "en-US"):
+
+# -------------------------------------------------------
+#      6) LanguageTool call (basic grammar)
+# -------------------------------------------------------
+def lt_check_sentence(sentence: str) -> dict:
     try:
-        data = {"text": sentence, "language": lang}
-        r = requests.post(LT_API_URL, data=data, timeout=10)
-        r.raise_for_status()
-        result = r.json()
+        data = {"text": sentence, "language": "en-US"}
+        r = requests.post(LT_API_URL, data=data, timeout=8)
+        return r.json()
     except Exception:
         return {"matches": []}
 
-    clean_matches = []
-    for m in result.get("matches", []):
-        good_reps = []
-        for rep in m.get("replacements", []):
-            s = rep["value"].strip().lower()
 
-            if abs(len(s) - m.get("length", 0)) > 3:
-                continue
-            if s in {"motor", "father", "furthermore"}:
-                continue
+# -------------------------------------------------------
+#      7) Groq check (legal + grammar)
+# -------------------------------------------------------
+def groq_check(sentence: str, lt_wrong_words: list) -> list:
+    """
+    Groq MUST follow:
+      ✓ Black’s Law Dictionary mapping
+      ✓ LanguageTool-detected wrong words
+      ✓ Multi-word legal terms as ONE unit
+      ✓ Ignore helper words completely
+    Returns: list[{"wrong": "...", "suggestion": "..."}]
+    """
 
-            if s not in BLACKLAW:
-                if not re.match(r"^[a-z]+$", s):
-                    continue
+    # No client or nothing flagged by LT → skip Groq
+    if (not groq_client) or (not lt_wrong_words):
+        return []
 
-            good_reps.append(rep)
+    # Remove helper words from LT list (extra safety)
+    lt_wrong_words = [
+        w for w in lt_wrong_words if w.lower() not in IGNORE_WORDS
+    ]
+    if not lt_wrong_words:
+        return []
 
-        if good_reps:
-            m["replacements"] = good_reps
-            clean_matches.append(m)
+    prompt = f"""
+You are a hybrid LEGAL + GRAMMAR correction engine.
 
-    result["matches"] = clean_matches
-    return result
+RULES (FOLLOW STRICTLY):
+
+1. Only correct words/phrases that appear in this list from LanguageTool:
+   {lt_wrong_words}
+
+2. NEVER correct these common helper words:
+   ["was", "the", "and", "is", "are", "to", "for", "of", "in", "at", "by", "on", "with"]
+
+3. Apply Black's Law Dictionary corrections exactly:
+   - "suo moto"  -> "suo motu"
+   - "prima facia" -> "prima facie"
+   - "ratio decedendi" -> "ratio decidendi"
+   - "mens reaa" -> "mens rea"
+
+4. Treat multi-word legal terms as ONE UNIT.
+   Do NOT split or partially change them.
+
+5. NO explanations. NO extra text.
+   Output ONLY a PURE JSON array.
+
+Example valid output:
+[
+  {{"wrong": "prima facia", "suggestion": "prima facie"}},
+  {{"wrong": "suo moto", "suggestion": "suo motu"}}
+]
+
+Sentence to correct:
+\"\"\"{sentence}\"\"\""""
+
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",   # ✅ your available Groq model
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+
+        raw = response.choices[0].message.content or ""
+
+        # Extract JSON array from response
+        match = re.search(r"\[.*?\]", raw, re.DOTALL)
+        if not match:
+            return []
+
+        return json.loads(match.group(0))
+
+    except Exception as e:
+        print("GROQ ERROR:", e)
+        return []
 
 
-# ---------------------------------------------------------------------
-# ✅ Legal corrections (UNCHANGED LOGIC)
-# ---------------------------------------------------------------------
-def apply_legal_corrections(sentence: str):
-    corrected = sentence
-    applied = []
+# -------------------------------------------------------
+#      8) Detect legal phrases using manual list
+# -------------------------------------------------------
+def detect_legal(sentence: str):
+    """
+    Returns list of tuples:
+    [(wrong_phrase, correct_phrase, meaning), ...]
+    """
+    results = []
 
     for wrong, correct in LEGAL_FIX.items():
-        pattern = re.compile(r"\b" + re.escape(wrong) + r"\b", flags=re.IGNORECASE)
-        if re.search(pattern, corrected):
-            corrected = re.sub(pattern, correct, corrected)
+        if re.search(rf"\b{re.escape(wrong)}\b", sentence, re.IGNORECASE):
+            meaning = BLACKLAW.get(normalize_key(correct), "")
+            results.append((wrong, correct, meaning))
 
-            key = normalize_key(correct)
-            meaning = BLACKLAW.get(key, "(Meaning not found in Black’s Law Dictionary)")
-            applied.append((wrong, correct, meaning))
-
-    return corrected, applied
+    return results
 
 
-# ---------------------------------------------------------------------
-# ✅ DOCX APPLY CHANGES (UNCHANGED)
-# ---------------------------------------------------------------------
-def apply_replacements_to_doc(doc: Document, replacements):
-    for para in doc.paragraphs:
-        for r in replacements:
-            wrong = r["old"]
-            correct = r["new"]
-            if wrong.lower() in para.text.lower():
-                para.text = re.sub(
-                    rf"\b{re.escape(wrong)}\b",
-                    correct,
-                    para.text,
-                    flags=re.IGNORECASE,
-                )
-    return doc
+# -------------------------------------------------------
+#      9) Build highlighted HTML line by line
+# -------------------------------------------------------
+def process_text_line_by_line(text: str) -> str:
 
+    lines = text.split("\n")
+    final_html = []
 
-# ---------------------------------------------------------------------
-# ✅ HTML PREVIEW – (UNCHANGED)
-# ---------------------------------------------------------------------
-def process_text_line_by_line(text: str):
-    lines = text.splitlines()
-    html_parts, issues = [], []
+    for line in lines:
 
-    for i, line in enumerate(lines, start=1):
-        if is_reference_like(line):
-            html_parts.append(f"<p>{line}</p>")
-            continue
-
+        # Blank line
         if not line.strip():
-            html_parts.append("<p></p>")
+            final_html.append("<p></p>")
             continue
 
-        corrected, legal_hits = apply_legal_corrections(line)
-        html_line = corrected
+        # Reference-like line: no grammar highlight
+        if is_reference_like(line):
+            final_html.append(f"<p>{line}</p>")
+            continue
 
+        working = line
+        html_line = line
+
+        # ----- LanguageTool: find wrong words -----
+        lt_res = lt_check_sentence(working)
+        lt_wrong_words = []
+        for m in lt_res.get("matches", []):
+            wrong = working[m["offset"]:m["offset"] + m["length"]]
+            if wrong.strip() and wrong.lower() not in IGNORE_WORDS:
+                lt_wrong_words.append(wrong)
+
+        # ----- Manual Legal detection -----
+        legal_hits = detect_legal(working)
+
+        # ----- Groq suggestions (top-level intelligence) -----
+        groq_hits = groq_check(working, lt_wrong_words)
+
+        # Combine suggestions
+        combined = {}   # {wrong: {"black": ..., "groq": ...}}
+
+        # Legal dictionary → Black suggestion
         for wrong, correct, meaning in legal_hits:
-            wrong_e = escape(wrong)
-            correct_e = escape(correct)
+            combined.setdefault(wrong, {"black": correct, "groq": None})
+
+        # Groq result → Groq suggestion
+        for g in groq_hits:
+            wrong = (g.get("wrong") or "").strip()
+            suggestion = (g.get("suggestion") or "").strip()
+            if not wrong or not suggestion:
+                continue
+            combined.setdefault(wrong, {"black": None, "groq": None})
+            combined[wrong]["groq"] = suggestion
+
+        # ----- Build HTML spans -----
+        for wrong, sug in combined.items():
+            black = sug["black"] or ""
+            groq = sug["groq"] or ""
+
+            span = (
+                f"<span class='grammar-wrong' "
+                f"data-wrong='{wrong}' "
+                f"data-black='{black}' "
+                f"data-groq='{groq}'>{wrong}</span>"
+            )
 
             html_line = re.sub(
-                re.escape(wrong),
-                (
-                    "<span class='error legal-correct' "
-                    f"data-wrong='{wrong_e}' "
-                    f"data-suggestion='{correct_e}' "
-                    f"data-black-suggestion='{correct_e}' "
-                    f"data-general-suggestion='' "
-                    f"data-message='Legal correction'>{correct_e}</span>"
-                ),
+                rf"\b{re.escape(wrong)}\b",
+                span,
                 html_line,
-                flags=re.IGNORECASE,
+                flags=re.IGNORECASE
             )
 
-            issues.append(
-                {"line": i, "wrong": wrong, "suggestion": correct,
-                 "message": "Legal correction", "meaning": meaning}
-            )
+        final_html.append(f"<p>{html_line}</p>")
 
-        lt_result = lt_check_sentence(corrected)
-        matches = lt_result.get("matches", [])
-
-        for m in matches:
-            off, ln = m.get("offset", 0), m.get("length", 0)
-            reps = m.get("replacements", [])
-            if not reps:
-                continue
-
-            black_sug = None
-            general_sug = None
-
-            for rep in reps:
-                cand = rep["value"].strip()
-                norm = normalize_key(cand)
-                if norm in BLACKLAW and not black_sug:
-                    black_sug = cand
-                if norm not in BLACKLAW and not general_sug:
-                    general_sug = cand
-
-            primary_sug = black_sug or general_sug or reps[0]["value"]
-            wrong = corrected[off : off + ln]
-
-            meaning = BLACKLAW.get(normalize_key(primary_sug), "(No meaning found)")
-
-            wrong_e = escape(wrong)
-            primary_e = escape(primary_sug)
-            black_e = escape(black_sug) if black_sug else ""
-            general_e = escape(general_sug) if general_sug else ""
-
-            html_line = html_line.replace(
-                wrong,
-                (
-                    "<span class='error grammar-wrong' "
-                    f"data-wrong='{wrong_e}' "
-                    f"data-suggestion='{primary_e}' "
-                    f"data-black-suggestion='{black_e}' "
-                    f"data-general-suggestion='{general_e}'>"
-                    f"{wrong_e}</span>"
-                ),
-            )
-
-            issues.append(
-                {"line": i, "wrong": wrong, "suggestion": primary_sug,
-                 "message": m.get("message", ""), "meaning": meaning}
-            )
-
-        html_parts.append(f"<p>{html_line}</p>")
-
-    return "\n".join(html_parts), issues
+    return "\n".join(final_html)
 
 
-# ---------------------------------------------------------------------
-# ✅ MAIN ROUTE (UNCHANGED)
-# ---------------------------------------------------------------------
+# -------------------------------------------------------
+#      10) Routes
+# -------------------------------------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
         text_input = request.form.get("text", "").strip()
         file = request.files.get("file")
-        replacements_json = request.form.get("replacements")
-        replacements = json.loads(replacements_json) if replacements_json else []
 
         if file and file.filename.endswith(".docx"):
             doc = Document(file)
-            text = "\n".join(p.text for p in doc.paragraphs)
-            base = os.path.splitext(file.filename)[0]
+            text = "\n".join([p.text for p in doc.paragraphs])
         else:
             text = text_input
-            doc = Document()
-            doc.add_paragraph(text)
-            base = "corrected_output"
 
-        if not text:
-            return render_template("index.html", error="Please provide text or upload a .docx file.")
-
-        html_out, issues = process_text_line_by_line(text)
-
-        return render_template("result.html", highlighted_html=html_out)
+        output = process_text_line_by_line(text)
+        return render_template("result.html", highlighted_html=output)
 
     return render_template("index.html")
 
 
-# ---------------------------------------------------------------------
-# ✅ **THIS IS THE IMPORTANT FIX**
-# ---------------------------------------------------------------------
 @app.route("/download_corrected", methods=["POST"])
 def download_corrected():
 
@@ -260,20 +291,29 @@ def download_corrected():
     replacements = json.loads(request.form.get("replacements", "[]"))
 
     doc = Document()
-
     for line in final_text.split("\n"):
         doc.add_paragraph(line)
 
-    doc = apply_replacements_to_doc(doc, replacements)
+    # Apply replacements into DOCX
+    for para in doc.paragraphs:
+        for rep in replacements:
+            wrong = rep["old"]
+            correct = rep["new"]
+            para.text = re.sub(
+                rf"\b{re.escape(wrong)}\b",
+                correct,
+                para.text,
+                flags=re.IGNORECASE
+            )
 
-    os.makedirs("static", exist_ok=True)
-    output_path = os.path.join("static", "Corrected_Final_Output.docx")
+    output_path = "static/Corrected_Final_Output.docx"
     doc.save(output_path)
 
     return send_file(output_path, as_attachment=True)
 
 
-# ---------------------------------------------------------------------
-
+# -------------------------------------------------------
+#      11) Run app
+# -------------------------------------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(debug=True)
