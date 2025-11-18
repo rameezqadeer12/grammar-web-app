@@ -151,14 +151,12 @@ def detect_legal(sentence: str):
             results.append((wrong, correct, meaning))
     return results
 
-
 # -------------------------------------------------------
-#      9) Build highlighted HTML line by line
+# 9) Build highlighted HTML line by line → FIXED VERSION
 # -------------------------------------------------------
 def process_text_line_by_line(text: str) -> str:
     lines = text.split("\n")
     final_html = []
-
     for line in lines:
         if not line.strip():
             final_html.append("<p></p>")
@@ -170,6 +168,7 @@ def process_text_line_by_line(text: str) -> str:
         working = line
         html_line = line
 
+        # LanguageTool
         lt_res = lt_check_sentence(working)
         lt_wrong_words = []
         for m in lt_res.get("matches", []):
@@ -180,42 +179,66 @@ def process_text_line_by_line(text: str) -> str:
         legal_hits = detect_legal(working)
         groq_hits = groq_check(working, lt_wrong_words)
 
+        # Combined dictionary: lower_case → data
         combined = {}
 
+        # Add Black's Law hits (lower case key)
         for wrong, correct, meaning in legal_hits:
-            combined.setdefault(wrong, {"black": correct, "groq": None})
+            key = wrong.lower()
+            combined[key] = {
+                "original": wrong,           # original casing
+                "black": correct,
+                "groq": None,
+                "meaning": meaning
+            }
 
+        # Add Groq hits (match by lower case)
         for g in groq_hits:
-            wrong = (g.get("wrong") or "").strip()
+            wrong_raw = (g.get("wrong") or "").strip()
             suggestion = (g.get("suggestion") or "").strip()
-            if not wrong or not suggestion:
+            if not wrong_raw or not suggestion:
                 continue
-            combined.setdefault(wrong, {"black": None, "groq": None})
-            combined[wrong]["groq"] = suggestion
+            key = wrong_raw.lower()
+            if key not in combined:
+                # Find original word in line
+                match = re.search(rf"\b{re.escape(wrong_raw)}\b", working, re.IGNORECASE)
+                original = match.group(0) if match else wrong_raw
+                combined[key] = {
+                    "original": original,
+                    "black": None,
+                    "groq": None,
+                    "meaning": ""
+                }
+            combined[key]["groq"] = suggestion
 
-        for wrong, sug in combined.items():
-            black = sug["black"] or ""
-            groq = sug["groq"] or ""
+        # Now replace in html_line with correct original casing
+        for key, data in combined.items():
+            original_word = data["original"]
+            black = data["black"] or ""
+            groq = data["groq"] or ""
+            meaning = data["meaning"] or ""
 
             span = (
                 f"<span class='grammar-wrong' "
-                f"data-wrong='{wrong}' "
+                f"data-wrong='{original_word}' "
                 f"data-black='{black}' "
-                f"data-groq='{groq}'>{wrong}</span>"
+                f"data-groq='{groq}' "
+                f"data-meaning='{meaning}'>"
+                f"{original_word}</span>"
             )
 
+            # Replace only once, case-insensitively
             html_line = re.sub(
-                rf"\b{re.escape(wrong)}\b",
-                span,
+                rf"\b{re.escape(re.escape(original_word))}\b",
+                span.replace('\\', '\\\\'),  # double escape fix
                 html_line,
+                count=1,
                 flags=re.IGNORECASE
             )
 
         final_html.append(f"<p>{html_line}</p>")
 
     return "\n".join(final_html)
-
-
 # -------------------------------------------------------
 #      10) Routes
 # -------------------------------------------------------
@@ -269,3 +292,4 @@ def download_corrected():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
