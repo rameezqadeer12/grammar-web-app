@@ -7,12 +7,12 @@ import json
 from dotenv import load_dotenv
 
 # -------------------------------------------------------
-# 1) Load environment variables (.env)
+#           1) Load environment variables (.env)
 # -------------------------------------------------------
 load_dotenv()
 
 # -------------------------------------------------------
-# 2) Groq client init → CLEAN (proxy hack removed)
+#           2) Groq client init (Render-safe)
 # -------------------------------------------------------
 from groq import Groq
 
@@ -24,19 +24,19 @@ if GROQ_API_KEY and GROQ_API_KEY.strip():
         groq_client = Groq(api_key=GROQ_API_KEY)
         print("Groq Loaded Successfully")
     except Exception as e:
-        print("Groq Init Error:", str(e))
-        groq_client = None
+        print("Groq Init Error:", e)
 else:
     print("GROQ_API_KEY missing or empty")
 
 # -------------------------------------------------------
-# 3) Flask app + LanguageTool URL
+#           3) Flask app + LanguageTool URL
 # -------------------------------------------------------
 app = Flask(__name__)
+
 LT_API_URL = "https://api.languagetool.org/v2/check"
 
 # -------------------------------------------------------
-# 4) Load Black’s Law Dictionary JSON
+#      4) Load Black’s Law Dictionary JSON (local)
 # -------------------------------------------------------
 try:
     with open("blacklaw_terms.json", "r", encoding="utf-8") as f:
@@ -44,11 +44,14 @@ try:
 except Exception:
     BLACKLAW = {}
 
+
 def normalize_key(word: str) -> str:
+    """Normalize keys for Black's Law lookup."""
     return re.sub(r"[^a-z\s]", "", word.lower().strip())
 
+
 # -------------------------------------------------------
-# 5) Legal fix rules
+#      5) Legal fix rules (wrong → correct)
 # -------------------------------------------------------
 LEGAL_FIX = {
     "suo moto": "suo motu",
@@ -57,12 +60,15 @@ LEGAL_FIX = {
     "ratio decedendi": "ratio decidendi",
 }
 
+# Common helper words we never want Groq to touch
 IGNORE_WORDS = {
     "was", "the", "is", "and", "to", "in", "for",
     "of", "at", "by", "on", "with"
 }
 
+
 def is_reference_like(line: str) -> bool:
+    """Lines that look like references / links -> skip grammar checks."""
     s = line.strip()
     return (
         not s
@@ -73,8 +79,9 @@ def is_reference_like(line: str) -> bool:
         or re.match(r"^\(.+\d{4}.*\)$", s)
     )
 
+
 # -------------------------------------------------------
-# 6) LanguageTool API
+#      6) LanguageTool call (basic grammar)
 # -------------------------------------------------------
 def lt_check_sentence(sentence: str) -> dict:
     try:
@@ -84,8 +91,9 @@ def lt_check_sentence(sentence: str) -> dict:
     except Exception:
         return {"matches": []}
 
+
 # -------------------------------------------------------
-# 7) Groq check (LLM grammar)
+#      7) Groq check (legal + grammar)
 # -------------------------------------------------------
 def groq_check(sentence: str, lt_wrong_words: list) -> list:
     if (not groq_client) or (not lt_wrong_words):
@@ -99,33 +107,41 @@ def groq_check(sentence: str, lt_wrong_words: list) -> list:
 
     prompt = f"""
 You are a hybrid LEGAL + GRAMMAR correction engine.
-Only correct words from this list: {lt_wrong_words}
-Apply Black's Law fixes if needed.
-Output ONLY a pure JSON array like:
-[{{"wrong": "prima facia", "suggestion": "prima facie"}}]
+
+RULES (FOLLOW STRICTLY):
+
+1. Only correct words/phrases that appear in this list: {lt_wrong_words}
+2. NEVER correct helper words: was, the, is, and, to, in, for, of, at, by, on, with
+3. Apply Black's Law fixes exactly:
+   - suo moto → suo motu
+   - prima facia → prima facie
+   - mens reaa → mens rea
+   - ratio decedendi → ratio decidendi
+4. Output ONLY a pure JSON array.
 
 Sentence:
-\"\"\"{sentence}\"\"\"
-"""
+\"\"\"{sentence}\"\"\""""
 
     try:
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=512
+            temperature=0
         )
+
         raw = response.choices[0].message.content or ""
-        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        match = re.search(r"\[.*?\]", raw, re.DOTALL)
         if not match:
             return []
         return json.loads(match.group(0))
+
     except Exception as e:
         print("GROQ ERROR:", e)
         return []
 
+
 # -------------------------------------------------------
-# 8) Legal phrase detection
+#      8) Detect legal phrases using manual list
 # -------------------------------------------------------
 def detect_legal(sentence: str):
     results = []
@@ -135,12 +151,14 @@ def detect_legal(sentence: str):
             results.append((wrong, correct, meaning))
     return results
 
+
 # -------------------------------------------------------
-# 9) Build highlighted HTML → YEH WAHI JAGAH HAI JAHAN FIX KIYA
+#      9) Build highlighted HTML line by line
 # -------------------------------------------------------
 def process_text_line_by_line(text: str) -> str:
     lines = text.split("\n")
     final_html = []
+
     for line in lines:
         if not line.strip():
             final_html.append("<p></p>")
@@ -152,7 +170,6 @@ def process_text_line_by_line(text: str) -> str:
         working = line
         html_line = line
 
-        # LanguageTool
         lt_res = lt_check_sentence(working)
         lt_wrong_words = []
         for m in lt_res.get("matches", []):
@@ -163,83 +180,72 @@ def process_text_line_by_line(text: str) -> str:
         legal_hits = detect_legal(working)
         groq_hits = groq_check(working, lt_wrong_words)
 
-        # Combined suggestions
         combined = {}
 
-        # First add Black's Law hits
         for wrong, correct, meaning in legal_hits:
-            combined[wrong.lower()] = {"black": correct, "groq": None, "meaning": meaning}
+            combined.setdefault(wrong, {"black": correct, "groq": None})
 
-        # Then add/override with Groq suggestions
         for g in groq_hits:
-            if isinstance(g, dict):
-                wrong = (g.get("wrong") or "").strip()
-                suggestion = (g.get("suggestion") or "").strip()
-                if wrong and suggestion:
-                    key = wrong.lower()
-                    if key not in combined:
-                        combined[key] = {"black": None, "groq": None, "meaning": ""}
-                    combined[key]["groq"] = suggestion
+            wrong = (g.get("wrong") or "").strip()
+            suggestion = (g.get("suggestion") or "").strip()
+            if not wrong or not suggestion:
+                continue
+            combined.setdefault(wrong, {"black": None, "groq": None})
+            combined[wrong]["groq"] = suggestion
 
-        # Build HTML spans
-        for wrong_lower, data in combined.items():
-            # Find original casing
-            match = re.search(rf"\b{re.escape(wrong_lower)}\b", html_line, re.IGNORECASE)
-            original_word = match.group(0) if match else wrong_lower.title()
+        for wrong, sug in combined.items():
+            black = sug["black"] or ""
+            groq = sug["groq"] or ""
 
-            black_sug = data["black"]
-            groq_sug = data["groq"]
-            meaning = data["meaning"] or ""
+            span = (
+                f"<span class='grammar-wrong' "
+                f"data-wrong='{wrong}' "
+                f"data-black='{black}' "
+                f"data-groq='{groq}'>{wrong}</span>"
+            )
 
-            # Case 1: Both suggestions exist and different → dropdown
-            if black_sug and groq_sug and black_sug.lower() != groq_sug.lower():
-                span = f"<span class='grammar-wrong' " \
-                       f"data-wrong='{original_word}' " \
-                       f"data-black='{black_sug}' " \
-                       f"data-groq='{groq_sug}' " \
-                       f"data-meaning='{meaning}' " \
-                       f"style='border-bottom:2px solid #ff9800; cursor:pointer;' " \
-                       f"title='Click for options'>{{{{ {original_word} }}}}</span>"
-                span = span.replace("{{{{", "{").replace("}}}}", "}")  # escape fix
-
-            # Case 2: Only Black's Law
-            elif black_sug:
-                span = f"<span class='grammar-wrong' data-wrong='{original_word}' data-black='{black_sug}' data-groq='' data-meaning='{meaning}'>{original_word}</span>"
-
-            # Case 3: Only Groq/AI
-            else:
-                span = f"<span class='grammar-wrong' data-wrong='{original_word}' data-black='' data-groq='{groq_sug}' data-meaning=''>{original_word}</span>"
-
-            html_line = re.sub(rf"\b{re.escape(original_word)}\b", span, html_line, count=1, flags=re.IGNORECASE)
+            html_line = re.sub(
+                rf"\b{re.escape(wrong)}\b",
+                span,
+                html_line,
+                flags=re.IGNORECASE
+            )
 
         final_html.append(f"<p>{html_line}</p>")
 
     return "\n".join(final_html)
 
+
 # -------------------------------------------------------
-# 10) Routes (bilkul same)
+#      10) Routes
 # -------------------------------------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
         text_input = request.form.get("text", "").strip()
         file = request.files.get("file")
+
         if file and file.filename.endswith(".docx"):
             doc = Document(file)
             text = "\n".join([p.text for p in doc.paragraphs])
         else:
             text = text_input
+
         output = process_text_line_by_line(text)
         return render_template("result.html", highlighted_html=output)
+
     return render_template("index.html")
+
 
 @app.route("/download_corrected", methods=["POST"])
 def download_corrected():
     final_text = request.form.get("final_text", "")
     replacements = json.loads(request.form.get("replacements", "[]"))
+
     doc = Document()
     for line in final_text.split("\n"):
         doc.add_paragraph(line)
+
     for para in doc.paragraphs:
         for rep in replacements:
             wrong = rep["old"]
@@ -250,12 +256,15 @@ def download_corrected():
                 para.text,
                 flags=re.IGNORECASE
             )
+
     output_path = "static/Corrected_Final_Output.docx"
     doc.save(output_path)
+
     return send_file(output_path, as_attachment=True)
 
+
 # -------------------------------------------------------
-# 11) Run app
+#      11) Run app → Render ke liye yeh zaroori hai
 # -------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
