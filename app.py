@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # -------------------------------------------------------
-# 2) Groq client init → CLEAN & WORKING (proxy hack hata diya)
+# 2) Groq client init → CLEAN (proxy hack removed)
 # -------------------------------------------------------
 from groq import Groq
 
@@ -85,7 +85,7 @@ def lt_check_sentence(sentence: str) -> dict:
         return {"matches": []}
 
 # -------------------------------------------------------
-# 7) Groq check (LLM grammar) + SAFE FIX
+# 7) Groq check (LLM grammar)
 # -------------------------------------------------------
 def groq_check(sentence: str, lt_wrong_words: list) -> list:
     if (not groq_client) or (not lt_wrong_words):
@@ -99,18 +99,14 @@ def groq_check(sentence: str, lt_wrong_words: list) -> list:
 
     prompt = f"""
 You are a hybrid LEGAL + GRAMMAR correction engine.
-RULES:
-1. Only correct words that appear in: {lt_wrong_words}
-2. Never correct helper words: {list(IGNORE_WORDS)}
-3. Apply Black's Law correction:
-   - suo moto → suo motu
-   - prima facia → prima facie
-   - ratio decedendi → ratio decidendi
-   - mens reaa → mens rea
-4. Do NOT explain. Output ONLY a pure JSON array.
+Only correct words from this list: {lt_wrong_words}
+Apply Black's Law fixes if needed.
+Output ONLY a pure JSON array like:
+[{{"wrong": "prima facia", "suggestion": "prima facie"}}]
 
 Sentence:
-\"\"\"{sentence}\"\"\""""
+\"\"\"{sentence}\"\"\"
+"""
 
     try:
         response = groq_client.chat.completions.create(
@@ -120,7 +116,7 @@ Sentence:
             max_tokens=512
         )
         raw = response.choices[0].message.content or ""
-        match = re.search(r"\[.*?\]", raw, re.DOTALL)
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
         if not match:
             return []
         return json.loads(match.group(0))
@@ -140,7 +136,7 @@ def detect_legal(sentence: str):
     return results
 
 # -------------------------------------------------------
-# 9) Build highlighted HTML (contains SAFE FIX)
+# 9) Build highlighted HTML → YEH WAHI JAGAH HAI JAHAN FIX KIYA
 # -------------------------------------------------------
 def process_text_line_by_line(text: str) -> str:
     lines = text.split("\n")
@@ -156,6 +152,7 @@ def process_text_line_by_line(text: str) -> str:
         working = line
         html_line = line
 
+        # LanguageTool
         lt_res = lt_check_sentence(working)
         lt_wrong_words = []
         for m in lt_res.get("matches", []):
@@ -166,10 +163,14 @@ def process_text_line_by_line(text: str) -> str:
         legal_hits = detect_legal(working)
         groq_hits = groq_check(working, lt_wrong_words)
 
+        # Combined suggestions
         combined = {}
-        for wrong, correct, meaning in legal_hits:
-            combined.setdefault(wrong.lower(), {"black": correct, "groq": None, "meaning": meaning})
 
+        # First add Black's Law hits
+        for wrong, correct, meaning in legal_hits:
+            combined[wrong.lower()] = {"black": correct, "groq": None, "meaning": meaning}
+
+        # Then add/override with Groq suggestions
         for g in groq_hits:
             if isinstance(g, dict):
                 wrong = (g.get("wrong") or "").strip()
@@ -180,83 +181,78 @@ def process_text_line_by_line(text: str) -> str:
                         combined[key] = {"black": None, "groq": None, "meaning": ""}
                     combined[key]["groq"] = suggestion
 
+        # Build HTML spans
         for wrong_lower, data in combined.items():
-            wrong_original = next(
-                (w for w in re.findall(rf"\b\w+\b", html_line) if w.lower() == wrong_lower), wrong_lower.title()
-            )
-            black = data["black"] or ""
-            groq = data["groq"] or ""
-            meaning = data["meaning"]
+            # Find original casing
+            match = re.search(rf"\b{re.escape(wrong_lower)}\b", html_line, re.IGNORECASE)
+            original_word = match.group(0) if match else wrong_lower.title()
 
-            span = (
-                f"<span class='grammar-wrong' "
-                f"data-wrong='{wrong_original}' "
-                f"data-black='{black}' "
-                f"data-groq='{groq}' "
-                f"data-meaning='{meaning}'>{wrong_original}</span>"
-            )
-            html_line = re.sub(
-                rf"\b{re.escape(wrong_original)}\b",
-                span,
-                html_line,
-                count=1,
-                flags=re.IGNORECASE
-            )
+            black_sug = data["black"]
+            groq_sug = data["groq"]
+            meaning = data["meaning"] or ""
+
+            # Case 1: Both suggestions exist and different → dropdown
+            if black_sug and groq_sug and black_sug.lower() != groq_sug.lower():
+                span = f"<span class='grammar-wrong' " \
+                       f"data-wrong='{original_word}' " \
+                       f"data-black='{black_sug}' " \
+                       f"data-groq='{groq_sug}' " \
+                       f"data-meaning='{meaning}' " \
+                       f"style='border-bottom:2px solid #ff9800; cursor:pointer;' " \
+                       f"title='Click for options'>{{{{ {original_word} }}}}</span>"
+                span = span.replace("{{{{", "{").replace("}}}}", "}")  # escape fix
+
+            # Case 2: Only Black's Law
+            elif black_sug:
+                span = f"<span class='grammar-wrong' data-wrong='{original_word}' data-black='{black_sug}' data-groq='' data-meaning='{meaning}'>{original_word}</span>"
+
+            # Case 3: Only Groq/AI
+            else:
+                span = f"<span class='grammar-wrong' data-wrong='{original_word}' data-black='' data-groq='{groq_sug}' data-meaning=''>{original_word}</span>"
+
+            html_line = re.sub(rf"\b{re.escape(original_word)}\b", span, html_line, count=1, flags=re.IGNORECASE)
 
         final_html.append(f"<p>{html_line}</p>")
 
     return "\n".join(final_html)
 
 # -------------------------------------------------------
-# 10) Routes
+# 10) Routes (bilkul same)
 # -------------------------------------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
         text_input = request.form.get("text", "").strip()
         file = request.files.get("file")
-
         if file and file.filename.endswith(".docx"):
             doc = Document(file)
-            text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+            text = "\n".join([p.text for p in doc.paragraphs])
         else:
             text = text_input
-
-        if not text.strip():
-            return render_template("index.html", error="No text found!")
-
         output = process_text_line_by_line(text)
         return render_template("result.html", highlighted_html=output)
-
     return render_template("index.html")
 
 @app.route("/download_corrected", methods=["POST"])
 def download_corrected():
     final_text = request.form.get("final_text", "")
     replacements = json.loads(request.form.get("replacements", "[]"))
-
     doc = Document()
     for line in final_text.split("\n"):
-        if line.strip():
-            doc.add_paragraph(line)
-
-    # Apply replacements
+        doc.add_paragraph(line)
     for para in doc.paragraphs:
         for rep in replacements:
-            wrong = rep.get("old", "")
-            correct = rep.get("new", "")
-            if wrong and correct:
-                para.text = re.sub(
-                    rf"\b{re.escape(wrong)}\b",
-                    correct,
-                    para.text,
-                    flags=re.IGNORECASE
-                )
-
+            wrong = rep["old"]
+            correct = rep["new"]
+            para.text = re.sub(
+                rf"\b{re.escape(wrong)}\b",
+                correct,
+                para.text,
+                flags=re.IGNORECASE
+            )
     output_path = "static/Corrected_Final_Output.docx"
     doc.save(output_path)
-
-    return send_file(output_path, as_attachment=True, download_name="Corrected_Document.docx")
+    return send_file(output_path, as_attachment=True)
 
 # -------------------------------------------------------
 # 11) Run app
