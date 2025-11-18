@@ -90,8 +90,8 @@ Black's Law fixes (apply if present):
 - mens reaa → mens rea
 - ratio decedendi → ratio decidendi
 Output ONLY this exact format. No extra text, no explanation:
-[{"wrong": "old word", "suggestion": "new word"}]
-Sentence: \"{sentence}\""""
+[{{"wrong": "old word", "suggestion": "new word"}}]
+Sentence: \"{sentence}\" """
     try:
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -237,3 +237,4 @@ def download_corrected():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
