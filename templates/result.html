@@ -7,31 +7,32 @@
   <style>
     body {
       font-family: 'Poppins', sans-serif;
-      background: #fff;
-      padding: 10px;
+      background: #fff;       /* plain background for sidebar */
+      padding: 8px;
       margin: 0;
-      max-width: 280px; /* Sidebar width */
+      max-width: 280px;       /* 🔑 sidebar width */
       overflow-x: hidden;
     }
     .container {
       background: #fff;
-      border-radius: 8px;
-      padding: 10px;
+      border-radius: 6px;
+      padding: 8px;
       width: 100%;
       box-shadow: none;
     }
     h1 {
-      font-size: 16px;
-      margin: 0 0 10px 0;
+      font-size: 15px;
+      margin: 0 0 8px 0;
       color: #4e54c8;
+      text-align: center;
     }
     .text-area {
       border: 1px solid #ddd;
-      padding: 10px;
+      padding: 8px;
       border-radius: 6px;
-      line-height: 1.5;
-      font-size: 14px;
-      max-height: 300px;
+      line-height: 1.4;
+      font-size: 13px;
+      max-height: 220px;      /* smaller height for sidebar */
       overflow-y: auto;
     }
     .grammar-wrong {
@@ -44,45 +45,45 @@
     .popup-box {
       position: absolute;
       background: white;
-      padding: 10px;
+      padding: 8px;
       border-radius: 6px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-      width: 260px; /* fits sidebar */
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      width: 240px;           /* fits inside 280px sidebar */
       max-width: 95%;
       z-index: 9999;
       display: none;
+      font-size: 12px;
     }
     .label-title {
       font-weight: bold;
       color: #4e54c8;
-      font-size: 1rem;
-      margin-bottom: 8px;
+      font-size: 0.9rem;
+      margin-bottom: 6px;
     }
     .meaning {
       font-style: italic;
       color: #666;
-      margin: 6px 0;
-      padding: 6px;
+      margin: 4px 0;
+      padding: 4px;
       background: #f8f9fa;
       border-radius: 4px;
+      font-size: 12px;
     }
     button {
-      margin-top: 6px;
+      margin-top: 4px;
       width: 100%;
-      font-size: 13px;
+      font-size: 12px;
+      padding: 6px;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
     }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>✨ Grammar Check Result</h1>
-    <button class="btn btn-success btn-sm mb-2" onclick="downloadFinalDoc()">⬇️ Download Corrected File</button>
     <div id="textContainer" class="text-area">{{ highlighted_html|safe }}</div>
-
-    <form id="downloadForm" action="/download_corrected" method="POST">
-      <input type="hidden" name="final_text" id="finalTextField">
-      <input type="hidden" name="replacements" id="finalReplacementsField">
-    </form>
 
     <div id="popup" class="popup-box">
       <h4 class="label-title">Correction Suggestion</h4>
@@ -98,5 +99,79 @@
       </div>
     </div>
   </div>
+
+<script>
+let selectedElement = null;
+let selectedWrong = "";
+let blackSuggestion = "";
+let groqSuggestion = "";
+let meaningText = "";
+let replacements = [];
+
+document.addEventListener('click', function (e) {
+    if (!e.target.classList.contains('grammar-wrong')) return;
+
+    selectedElement = e.target;
+    selectedWrong = selectedElement.dataset.wrong || "";
+    blackSuggestion = selectedElement.dataset.black || "";
+    groqSuggestion = selectedElement.dataset.groq || "";
+    meaningText = selectedElement.dataset.meaning || "";
+
+    if (!blackSuggestion && !groqSuggestion) return;
+
+    document.getElementById("popupWrong").innerText = selectedWrong;
+
+    if (blackSuggestion) {
+        document.getElementById("popupBlack").innerText = blackSuggestion;
+        document.getElementById("blackDiv").style.display = "block";
+        document.getElementById("useBlackBtn").style.display = "inline-block";
+    } else {
+        document.getElementById("blackDiv").style.display = "none";
+        document.getElementById("useBlackBtn").style.display = "none";
+    }
+
+    if (groqSuggestion) {
+        document.getElementById("popupGroq").innerText = groqSuggestion;
+        document.getElementById("groqDiv").style.display = "block";
+        document.getElementById("useGroqBtn").style.display = "inline-block";
+    } else {
+        document.getElementById("groqDiv").style.display = "none";
+        document.getElementById("useGroqBtn").style.display = "none";
+    }
+
+    if (meaningText) {
+        document.getElementById("meaningDiv").innerText = "Meaning: " + meaningText;
+        document.getElementById("meaningDiv").style.display = "block";
+    } else {
+        document.getElementById("meaningDiv").style.display = "none";
+    }
+
+    document.getElementById("popup").style.display = "block";
+});
+
+function closePopup() {
+    document.getElementById('popup').style.display = "none";
+}
+
+function applyBlack() {
+    if (blackSuggestion) applyFix(blackSuggestion);
+}
+
+function applyGroq() {
+    if (groqSuggestion) applyFix(groqSuggestion);
+}
+
+function applyFix(finalSuggestion) {
+    if (!selectedElement || !finalSuggestion) return;
+    selectedElement.outerHTML = `<span style="background:#d4edda; color:#155724; padding:2px 4px; border-radius:4px; font-weight:bold;">${finalSuggestion}</span>`;
+    replacements.push({old: selectedWrong, new: finalSuggestion});
+    closePopup();
+}
+
+function ignoreFix() {
+    selectedElement.outerHTML = `<span style="text-decoration: line-through; color:#888;">${selectedWrong}</span>`;
+    closePopup();
+}
+</script>
 </body>
 </html>
