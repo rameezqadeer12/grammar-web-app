@@ -7,7 +7,6 @@ import json
 from dotenv import load_dotenv
 from flask_cors import CORS
 
-
 # -------------------------------------------------------
 # 1) Load environment variables (.env)
 # -------------------------------------------------------
@@ -30,7 +29,7 @@ else:
 # 3) Flask app + LanguageTool URL
 # -------------------------------------------------------
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # 👈 Add this line
 LT_API_URL = "https://api.languagetool.org/v2/check"
 # -------------------------------------------------------
 # 4) Load Black’s Law Dictionary JSON (local)
@@ -202,7 +201,6 @@ def process_text_line_by_line(text: str) -> str:
 # -------------------------------------------------------
 # 10) Routes
 # -------------------------------------------------------
-# Normal frontend route
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -216,13 +214,11 @@ def index():
         output = process_text_line_by_line(text)
         return render_template("result.html", highlighted_html=output)
     return render_template("index.html")
-
-# Google Docs sidebar route
 @app.route("/check", methods=["POST"])
-def check():
+def check_text():
     text = request.form.get("text", "")
     output = process_text_line_by_line(text)
-    return render_template("result.html", highlighted_html=output)
+    return output
 
 @app.route("/download_corrected", methods=["POST"])
 def download_corrected():
@@ -244,7 +240,6 @@ def download_corrected():
     output_path = "static/Corrected_Final_Output.docx"
     doc.save(output_path)
     return send_file(output_path, as_attachment=True)
-
 # -------------------------------------------------------
 # 11) Run app → Render ke liye yeh zaroori hai
 # -------------------------------------------------------
