@@ -7,10 +7,10 @@
   <style>
     body {
       font-family: 'Poppins', sans-serif;
-      background: #fff;       /* plain background for sidebar */
+      background: #fff;
       padding: 8px;
       margin: 0;
-      max-width: 280px;       /* 🔑 sidebar width */
+      max-width: 280px;   /* sidebar width */
       overflow-x: hidden;
     }
     .container {
@@ -32,7 +32,7 @@
       border-radius: 6px;
       line-height: 1.4;
       font-size: 13px;
-      max-height: 220px;      /* smaller height for sidebar */
+      max-height: 220px;
       overflow-y: auto;
     }
     .grammar-wrong {
@@ -48,7 +48,7 @@
       padding: 8px;
       border-radius: 6px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-      width: 240px;           /* fits inside 280px sidebar */
+      width: 240px;
       max-width: 95%;
       z-index: 9999;
       display: none;
@@ -88,14 +88,29 @@
     <div id="popup" class="popup-box">
       <h4 class="label-title">Correction Suggestion</h4>
       <p><b>Wrong Word:</b> <span id="popupWrong" style="color:red; font-weight:bold;"></span></p>
+
+      <!-- Meaning from Black's Law -->
       <div id="meaningDiv" class="meaning" style="display:none;"></div>
+
+      <!-- Individual Suggestions -->
       <div id="blackDiv"><p><b>Black's Law Suggestion:</b> <span id="popupBlack" style="color:green; font-weight:bold;"></span></p></div>
       <div id="groqDiv"><p><b>Groq/AI Suggestion:</b> <span id="popupGroq" style="color:#0066cc; font-weight:bold;"></span></p></div>
+
+      <!-- Combined Suggestions -->
+      <div id="combinedDiv" style="margin-top:6px; display:none;">
+        <p><b>Combined Suggestions:</b></p>
+        <ul style="margin:0; padding-left:16px; font-size:12px;">
+          <li id="combinedBlack" style="color:green;"></li>
+          <li id="combinedGroq" style="color:#0066cc;"></li>
+        </ul>
+      </div>
+
+      <!-- Action Buttons -->
       <div class="mt-2">
-        <button id="useBlackBtn" class="btn btn-success btn-sm" onclick="applyBlack()">Use Black's Law</button>
-        <button id="useGroqBtn" class="btn btn-primary btn-sm" onclick="applyGroq()">Use Groq/AI</button>
-        <button class="btn btn-warning btn-sm" onclick="ignoreFix()">Ignore</button>
-        <button class="btn btn-secondary btn-sm" onclick="closePopup()">Cancel</button>
+        <button id="useBlackBtn" onclick="applyBlack()">Use Black's Law</button>
+        <button id="useGroqBtn" onclick="applyGroq()">Use Groq/AI</button>
+        <button onclick="ignoreFix()">Ignore</button>
+        <button onclick="closePopup()">Cancel</button>
       </div>
     </div>
   </div>
@@ -144,6 +159,15 @@ document.addEventListener('click', function (e) {
         document.getElementById("meaningDiv").style.display = "block";
     } else {
         document.getElementById("meaningDiv").style.display = "none";
+    }
+
+    // Show combined suggestions if both exist
+    if (blackSuggestion && groqSuggestion) {
+        document.getElementById("combinedBlack").innerText = "Black's Law: " + blackSuggestion;
+        document.getElementById("combinedGroq").innerText = "Groq/AI: " + groqSuggestion;
+        document.getElementById("combinedDiv").style.display = "block";
+    } else {
+        document.getElementById("combinedDiv").style.display = "none";
     }
 
     document.getElementById("popup").style.display = "block";
