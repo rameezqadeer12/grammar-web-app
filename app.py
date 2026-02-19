@@ -219,7 +219,7 @@ Sentence: "{sentence}"
         for item in arr:
             w = str(item.get("wrong", "")).strip()
             s = str(item.get("suggestion", "")).strip()
-            if w and s:
+            if w and s and w.lower() !=s.lower():
                 cleaned.append({"wrong": w, "suggestion": s})
 
         groq_cache[cache_key] = cleaned
@@ -523,3 +523,4 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
