@@ -16,9 +16,7 @@ from flask_limiter.util import get_remote_address
 from cachetools import TTLCache
 
 
-# -----------------------------
-# 1) ENV
-# -----------------------------
+
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
@@ -537,5 +535,6 @@ def check_grammar():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
